@@ -118,13 +118,27 @@ def sync_and_notify():
         existing_identifiers = sb_manager.get_existing_identifiers('careon_applications', ['name', 'phone_number'])
         logger.info(f"Supabase에 존재하는 데이터 식별자 {len(existing_identifiers)}개를 가져왔습니다.")
 
-        # 4. Google Sheets에서 최신 데이터 가져오기 (엑셀로 다운로드)
-        excel_path = gs_manager.download_sheet_as_excel()
+        # 4. 모든 시트를 개별 파일로 다운로드 (옵션)
+        save_all_sheets = os.getenv('SAVE_ALL_SHEETS', 'true').lower() == 'true'
+        if save_all_sheets:
+            logger.info("📥 모든 시트를 개별 파일로 저장합니다...")
+            downloaded_files = gs_manager.download_all_sheets_separately()
+            logger.info(f"총 {len(downloaded_files)}개의 시트 파일을 저장했습니다.")
+            
+            # 선택된 시트의 파일 경로 찾기
+            excel_path = downloaded_files.get(selected_sheet)
+            if not excel_path:
+                # 전체 다운로드 실패 시 기본 방식으로 다운로드
+                excel_path = gs_manager.download_sheet_as_excel()
+        else:
+            # 5. Google Sheets에서 최신 데이터 가져오기 (전체 엑셀로 다운로드)
+            excel_path = gs_manager.download_sheet_as_excel()
+            
         if not excel_path:
             logger.error("Google Sheets 다운로드에 실패하여 동기화를 중단합니다.")
             return
 
-        # 5. 다운로드한 엑셀 파일에서 선택된 시트 읽기
+        # 6. 다운로드한 엑셀 파일에서 선택된 시트 읽기
         try:
             latest_data_df = pd.read_excel(excel_path, sheet_name=selected_sheet)
             logger.info(f"시트 '{selected_sheet}'에서 {len(latest_data_df)}개의 데이터를 가져왔습니다.")
@@ -134,7 +148,7 @@ def sync_and_notify():
             logger.info(f"사용 가능한 시트 목록: {sheet_names}")
             return
 
-        # 6. 신규 데이터 필터링 (Delta 동기화)
+        # 7. 신규 데이터 필터링 (Delta 동기화)
         new_records_to_insert = filter_new_data(latest_data_df, existing_identifiers, selected_sheet)
 
         if not new_records_to_insert:
@@ -142,20 +156,19 @@ def sync_and_notify():
         else:
             logger.info(f"🆕 {len(new_records_to_insert)}개의 신규 데이터를 발견했습니다.")
             
-            # 7. 신규 데이터 Supabase에 삽입
+            # 8. 신규 데이터 Supabase에 삽입
             sb_manager.insert_customer_inquiries(new_records_to_insert)
 
-            # 8. 신규 데이터에 대한 알림 발송
+            # 9. 신규 데이터에 대한 알림 발송
             # notification_manager.send_notifications_for_new_data(new_records_to_insert)
+
+        # 파일은 삭제하지 않고 보관
+        logger.info(f"📁 다운로드된 파일들은 'downloads' 폴더에 보관됩니다.")
 
     except Exception as e:
         logger.error("동기화 작업 중 심각한 오류가 발생했습니다.")
         logger.error(traceback.format_exc())
     finally:
-        # 9. 임시 엑셀 파일 삭제
-        if excel_path:
-            gs_manager.cleanup_temp_file(excel_path)
-            
         logger.info("✨ 동기화 작업이 종료되었습니다.")
         logger.info("="*50 + "\n")
 

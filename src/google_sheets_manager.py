@@ -17,7 +17,7 @@ import logging
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 import pandas as pd
 
@@ -108,15 +108,18 @@ class GoogleSheetsManager:
                 mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
             
-            os.makedirs(output_dir, exist_ok=True)
+            # 날짜별 폴더 생성
+            date_folder = datetime.now().strftime("%Y-%m-%d")
+            full_output_dir = os.path.join(output_dir, date_folder)
+            os.makedirs(full_output_dir, exist_ok=True)
             
             file_info = self.drive_service.files().get(fileId=spreadsheet_id, fields='name').execute()
             sheet_name = file_info.get('name', 'spreadsheet')
             safe_sheet_name = "".join(c for c in sheet_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
             
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%H%M%S")
             filename = f"{safe_sheet_name}_{timestamp}.xlsx"
-            filepath = os.path.join(output_dir, filename)
+            filepath = os.path.join(full_output_dir, filename)
 
             fh = io.FileIO(filepath, 'wb')
             downloader = MediaIoBaseDownload(fh, request)
@@ -132,23 +135,63 @@ class GoogleSheetsManager:
         except Exception as e:
             self.logger.error(f"스프레드시트 다운로드 실패: {e}")
             return None
-            
-    def cleanup_temp_file(self, filepath: str):
+    
+    def download_all_sheets_separately(self, output_dir: str = "downloads") -> Dict[str, str]:
         """
-        처리 완료 후 임시 파일을 삭제합니다.
-
-        :param filepath: 삭제할 파일 경로
+        스프레드시트의 각 시트를 개별 엑셀 파일로 다운로드합니다.
+        
+        :param output_dir: 다운로드할 디렉토리
+        :return: {시트이름: 파일경로} 형태의 딕셔너리
         """
+        downloaded_files = {}
+        
         try:
-            if os.path.exists(filepath):
-                os.remove(filepath)
-                self.logger.info(f"🗑️ 임시 파일 삭제 완료: {filepath}")
+            # 먼저 전체 스프레드시트를 다운로드
+            full_excel_path = self.download_sheet_as_excel(output_dir)
+            if not full_excel_path:
+                return downloaded_files
+                
+            # 날짜별 폴더 경로
+            date_folder = datetime.now().strftime("%Y-%m-%d")
+            full_output_dir = os.path.join(output_dir, date_folder, "sheets")
+            os.makedirs(full_output_dir, exist_ok=True)
+            
+            # 엑셀 파일 읽기
+            xl_file = pd.ExcelFile(full_excel_path)
+            sheet_names = xl_file.sheet_names
+            
+            # 각 시트를 개별 파일로 저장
+            for sheet_name in sheet_names:
+                try:
+                    # 시트 데이터 읽기
+                    df = pd.read_excel(full_excel_path, sheet_name=sheet_name)
+                    
+                    # 안전한 파일명 생성
+                    safe_sheet_name = "".join(c for c in sheet_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+                    timestamp = datetime.now().strftime("%H%M%S")
+                    filename = f"{safe_sheet_name}_{timestamp}.xlsx"
+                    filepath = os.path.join(full_output_dir, filename)
+                    
+                    # 개별 엑셀 파일로 저장
+                    with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+                        df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    
+                    downloaded_files[sheet_name] = filepath
+                    self.logger.info(f"시트 '{sheet_name}'을 개별 파일로 저장했습니다: {filepath}")
+                    
+                except Exception as e:
+                    self.logger.error(f"시트 '{sheet_name}' 저장 실패: {e}")
+                    
+            return downloaded_files
+            
         except Exception as e:
-            self.logger.error(f"임시 파일 삭제 실패: {e}")
+            self.logger.error(f"시트 개별 다운로드 실패: {e}")
+            return downloaded_files
 
 
 def main():
     """메인 함수"""
+    import argparse
     parser = argparse.ArgumentParser(description='Google Sheets 관리 도구 (개선된 버전)')
     parser.add_argument('action', choices=['list', 'download', 'download-url', 'download-all'], 
                        help='수행할 작업')
@@ -169,26 +212,26 @@ def main():
         manager = GoogleSheetsManager(args.service_account)
         
         if args.action == 'list':
-            sheet_list = manager.list_sheets()
-            manager.print_sheet_list(sheet_list)
+            sheet_list = manager.get_sheet_names()
+            manager.logger.info(f"스프레드시트에서 {len(sheet_list)}개의 시트를 찾았습니다: {sheet_list}")
             
         elif args.action == 'download':
             if not args.target:
                 print("❌ 시트 ID를 입력해주세요.")
                 return
-            manager.download_to_excel(args.target, args.output)
+            manager.download_sheet_as_excel(args.output)
             
         elif args.action == 'download-url':
             if not args.target:
                 print("❌ Google Sheets URL을 입력해주세요.")
                 return
-            manager.download_from_url(args.target, args.output)
+            manager.download_sheet_as_excel(args.output)
             
         elif args.action == 'download-all':
-            sheet_list = manager.list_sheets()
+            sheet_list = manager.get_sheet_names()
             for sheet in sheet_list:
-                print(f"\n📥 다운로드 중: {sheet['name']}")
-                manager.download_to_excel(sheet['id'], args.output)
+                print(f"\n📥 다운로드 중: {sheet}")
+                manager.download_all_sheets_separately(args.output)
             
     except Exception as e:
         print(f"❌ 프로그램 실행 중 오류: {e}")
