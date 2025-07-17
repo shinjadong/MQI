@@ -13,26 +13,37 @@ class SupabaseManager:
         self.client = supabase_client
         self.logger = logging.getLogger(__name__)
 
-    def get_existing_identifiers(self, view_name: str, identifier_columns: List[str]) -> Set[Tuple]:
+    def get_existing_identifiers(self, view_name: str, identifier_columns: list) -> set:
         """
-        지정된 뷰에서 기존 데이터의 고유 식별자 집합을 가져옵니다.
-
-        :param view_name: 조회할 Supabase 뷰 이름
-        :param identifier_columns: 고유 식별자로 사용할 컬럼 리스트
-        :return: 고유 식별자 튜플의 집합
+        지정된 뷰에서 기존 데이터의 고유 식별자를 가져옵니다.
+        
+        Args:
+            view_name: 조회할 뷰 이름
+            identifier_columns: 고유 식별자로 사용할 컬럼 리스트
+            
+        Returns:
+            (name, phone) 튜플의 집합
         """
         try:
-            select_query = ", ".join(identifier_columns)
-            response = self.client.table(view_name).select(select_query).execute()
+            # identifier_columns에서 phone_number를 phone으로 변경
+            db_columns = []
+            for col in identifier_columns:
+                if col == 'phone_number':
+                    db_columns.append('phone')
+                else:
+                    db_columns.append(col)
             
-            if response.data:
-                # 데이터베이스에서 받은 각 row를 튜플로 변환하여 집합에 추가
-                # None 값을 처리하기 위해 str()으로 감싸서 비교의 안정성을 높임
-                return {
-                    tuple(str(item.get(col)) for col in identifier_columns) 
-                    for item in response.data
-                }
-            return set()
+            response = self.client.table(view_name).select(','.join(db_columns)).execute()
+            existing_identifiers = set()
+            
+            for row in response.data:
+                # phone_number 대신 phone 사용
+                name = row.get('name')
+                phone = row.get('phone')
+                if name and phone:
+                    existing_identifiers.add((str(name), str(phone)))
+                    
+            return existing_identifiers
         except Exception as e:
             self.logger.error(f"'{view_name}' 뷰에서 기존 식별자 조회 실패: {e}")
             return set()
