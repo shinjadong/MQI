@@ -126,10 +126,19 @@ def sync_and_notify():
             selected_sheet = sheet_names[0]
             logger.warning(f"오늘 날짜와 매칭되는 시트를 찾을 수 없어 첫 번째 시트를 사용합니다: '{selected_sheet}'")
 
-        # 3. Supabase에서 기존 데이터의 고유 식별자(PK) 가져오기
-        #    'name'과 'phone_number'를 조합하여 고유 식별자로 사용합니다.
-        existing_identifiers = sb_manager.get_existing_identifiers('careon_applications', ['name', 'phone_number'])
-        logger.info(f"Supabase에 존재하는 데이터 식별자 {len(existing_identifiers)}개를 가져왔습니다.")
+        # 3. 모든 데이터 타입별로 처리
+        # inquiry_type에 따른 뷰 매핑
+        inquiry_types = {
+            'estimates': '견적 의뢰',
+            'consultations': '상담 문의', 
+            'inquiries': '문의 사항',
+            'cctv_management': 'CCTV 관리',
+            'careon_applications': '케어온 신청'
+        }
+        
+        # 전체 신규 데이터 카운트
+        total_new_records = 0
+        all_new_records = []
 
         # 4. 모든 시트를 개별 파일로 다운로드 (옵션)
         save_all_sheets = os.getenv('SAVE_ALL_SHEETS', 'true').lower() == 'true'
@@ -161,19 +170,37 @@ def sync_and_notify():
             logger.info(f"사용 가능한 시트 목록: {sheet_names}")
             return
 
-        # 7. 신규 데이터 필터링 (Delta 동기화)
-        new_records_to_insert = filter_new_data(latest_data_df, existing_identifiers, selected_sheet)
-
-        if not new_records_to_insert:
-            logger.info("✅ 새로운 데이터가 없습니다. 동기화가 최신 상태입니다.")
-        else:
-            logger.info(f"🆕 {len(new_records_to_insert)}개의 신규 데이터를 발견했습니다.")
+        # 7. 각 inquiry_type별로 처리
+        for view_name, inquiry_type in inquiry_types.items():
+            logger.info(f"\n--- {inquiry_type} ({view_name}) 처리 중 ---")
             
-            # 8. 신규 데이터 Supabase에 삽입
-            sb_manager.insert_customer_inquiries(new_records_to_insert)
+            # 해당 타입의 기존 데이터 식별자 가져오기
+            existing_identifiers = sb_manager.get_existing_identifiers(view_name, ['name', 'phone_number'])
+            logger.info(f"{inquiry_type}: Supabase에 {len(existing_identifiers)}개의 기존 데이터가 있습니다.")
+            
+            # 신규 데이터 필터링
+            new_records = filter_new_data_by_type(latest_data_df, existing_identifiers, selected_sheet, inquiry_type)
+            
+            if new_records:
+                logger.info(f"🆕 {inquiry_type}: {len(new_records)}개의 신규 데이터를 발견했습니다.")
+                
+                # Supabase에 삽입
+                sb_manager.insert_customer_inquiries(new_records)
+                
+                # 알림용 데이터 저장
+                for record in new_records:
+                    record['inquiry_type_display'] = inquiry_type
+                all_new_records.extend(new_records)
+                total_new_records += len(new_records)
+            else:
+                logger.info(f"✅ {inquiry_type}: 새로운 데이터가 없습니다.")
 
-            # 9. 신규 데이터에 대한 알림 발송
-            # notification_manager.send_notifications_for_new_data(new_records_to_insert)
+        # 8. 모든 신규 데이터에 대한 알림 발송
+        if all_new_records:
+            logger.info(f"\n🔔 총 {total_new_records}개의 신규 데이터에 대한 알림을 발송합니다.")
+            send_slack_notifications(all_new_records, notification_manager)
+        else:
+            logger.info("\n✅ 모든 데이터가 최신 상태입니다. 새로운 데이터가 없습니다.")
 
         # 파일은 삭제하지 않고 보관
         logger.info(f"📁 다운로드된 파일들은 'downloads' 폴더에 보관됩니다.")
@@ -220,6 +247,196 @@ def filter_new_data(df, existing_identifiers, sheet_name):
             new_records.append(record)
             
     return new_records
+
+def filter_new_data_by_type(df, existing_identifiers, sheet_name, inquiry_type):
+    """inquiry_type별로 DataFrame에서 신규 데이터를 필터링하고 유효성을 검사합니다."""
+    new_records = []
+    df = df.where(pd.notnull(df), None)  # NaN을 None으로 변환
+    
+    # inquiry_type별 컬럼 매핑
+    column_mappings = {
+        '견적 의뢰': {
+            'name_col': '이름',
+            'phone_col': '연락처',
+            'required_cols': ['이름', '연락처'],
+            'extra_fields': {
+                'company': '회사명',
+                'email': '이메일',
+                'inquiry_content': '문의내용'
+            }
+        },
+        '상담 문의': {
+            'name_col': '이름',
+            'phone_col': '연락처',
+            'required_cols': ['이름', '연락처'],
+            'extra_fields': {
+                'consultation_type': '상담유형',
+                'consultation_content': '상담내용',
+                'preferred_time': '희망시간'
+            }
+        },
+        '문의 사항': {
+            'name_col': '이름',
+            'phone_col': '연락처',
+            'required_cols': ['이름', '연락처'],
+            'extra_fields': {
+                'inquiry_category': '문의분류',
+                'inquiry_content': '문의내용',
+                'reply_needed': '답변필요여부'
+            }
+        },
+        'CCTV 관리': {
+            'name_col': '이름',
+            'phone_col': '연락처',
+            'required_cols': ['이름', '연락처'],
+            'extra_fields': {
+                'location': '설치장소',
+                'device_count': '장비수량',
+                'management_type': '관리유형'
+            }
+        },
+        '케어온 신청': {
+            'name_col': '이름',
+            'phone_col': '연락처',
+            'required_cols': ['이름', '연락처'],
+            'extra_fields': {
+                'application_datetime': '신청일시',
+                'installation_location': '설치장소',
+                'address': '주소',
+                'installation_count': '설치대수',
+                'privacy_consent': '개인정보동의'
+            }
+        }
+    }
+    
+    # 해당 inquiry_type의 매핑 정보 가져오기
+    mapping = column_mappings.get(inquiry_type, {})
+    if not mapping:
+        logger.warning(f"알 수 없는 inquiry_type: {inquiry_type}")
+        return new_records
+    
+    name_col = mapping['name_col']
+    phone_col = mapping['phone_col']
+    
+    # 필수 컬럼이 있는지 확인
+    missing_cols = []
+    for col in mapping['required_cols']:
+        if col not in df.columns:
+            missing_cols.append(col)
+    
+    if missing_cols:
+        logger.warning(f"{inquiry_type}: 필수 컬럼이 없습니다: {missing_cols}")
+        logger.info(f"사용 가능한 컬럼: {list(df.columns)}")
+        return new_records
+
+    for index, row in df.iterrows():
+        # 이름과 연락처 가져오기
+        name = row.get(name_col)
+        phone = row.get(phone_col)
+
+        # 필수 값 유효성 검사
+        if not name or not phone:
+            continue
+        
+        # 연락처 정제 (숫자만 추출)
+        phone_cleaned = re.sub(r'\D', '', str(phone))
+        
+        current_identifier = (str(name), phone_cleaned)
+        
+        if current_identifier not in existing_identifiers:
+            # 기본 필드
+            record = {
+                'name': name,
+                'phone': phone_cleaned,
+                'inquiry_type': inquiry_type,
+                'sheet_name': sheet_name,
+                'created_at': datetime.now().isoformat()
+            }
+            
+            # inquiry_type별 추가 필드 매핑
+            for db_field, sheet_col in mapping.get('extra_fields', {}).items():
+                if sheet_col in row:
+                    value = row.get(sheet_col)
+                    if pd.notna(value):  # null이 아닌 경우만 추가
+                        record[db_field] = value
+            
+            new_records.append(record)
+            
+    return new_records
+
+def send_slack_notifications(new_records, notification_manager):
+    """신규 데이터에 대한 슬랙 알림을 발송합니다."""
+    if not new_records:
+        return
+    
+    # inquiry_type별로 그룹화
+    grouped_records = {}
+    for record in new_records:
+        inquiry_type = record.get('inquiry_type_display', '기타')
+        if inquiry_type not in grouped_records:
+            grouped_records[inquiry_type] = []
+        grouped_records[inquiry_type].append(record)
+    
+    # 슬랙 메시지 생성
+    message_parts = [
+        f"🔔 *새로운 문의가 {len(new_records)}건 접수되었습니다!*",
+        f"📅 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        ""
+    ]
+    
+    # 각 타입별 상세 정보
+    for inquiry_type, records in grouped_records.items():
+        message_parts.append(f"*【{inquiry_type}】* - {len(records)}건")
+        
+        for i, record in enumerate(records[:5]):  # 각 타입별 최대 5건만 표시
+            name = record.get('name', '이름 없음')
+            phone = record.get('phone', '연락처 없음')
+            
+            # 전화번호 포맷팅 (010-1234-5678 형식)
+            if len(phone) == 11 and phone.startswith('010'):
+                phone_formatted = f"{phone[:3]}-{phone[3:7]}-{phone[7:]}"
+            elif len(phone) == 10:
+                phone_formatted = f"{phone[:3]}-{phone[3:6]}-{phone[6:]}"
+            else:
+                phone_formatted = phone
+            
+            # 타입별 추가 정보 표시
+            extra_info = ""
+            if inquiry_type == '케어온 신청':
+                location = record.get('installation_location', '')
+                if location:
+                    extra_info = f" | 설치장소: {location}"
+            elif inquiry_type == '견적 의뢰':
+                company = record.get('company', '')
+                if company:
+                    extra_info = f" | 회사: {company}"
+            elif inquiry_type == 'CCTV 관리':
+                location = record.get('location', '')
+                if location:
+                    extra_info = f" | 위치: {location}"
+            
+            message_parts.append(f"  {i+1}. {name} ({phone_formatted}){extra_info}")
+        
+        if len(records) > 5:
+            message_parts.append(f"  ... 외 {len(records) - 5}건")
+        
+        message_parts.append("")  # 빈 줄 추가
+    
+    # Supabase 대시보드 링크 추가 (있는 경우)
+    supabase_url = os.getenv('SUPABASE_URL', '')
+    if supabase_url:
+        project_id = supabase_url.split('.')[0].replace('https://', '')
+        dashboard_url = f"https://supabase.com/dashboard/project/{project_id}/editor"
+        message_parts.append(f"📊 [Supabase 대시보드 바로가기]({dashboard_url})")
+    
+    message = "\n".join(message_parts)
+    
+    # 슬랙으로 발송
+    try:
+        notification_manager.send_all(message)
+        logger.info("✅ 슬랙 알림이 성공적으로 발송되었습니다.")
+    except Exception as e:
+        logger.error(f"❌ 슬랙 알림 발송 중 오류 발생: {e}")
 
 def main():
     """
