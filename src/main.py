@@ -162,8 +162,22 @@ def sync_and_notify():
 
         # 6. 다운로드한 엑셀 파일에서 선택된 시트 읽기
         try:
-            latest_data_df = pd.read_excel(excel_path, sheet_name=selected_sheet)
+            # 개별 시트 파일인지 전체 파일인지 확인
+            if save_all_sheets and excel_path in downloaded_files.values():
+                # 개별 시트 파일인 경우 sheet_name 파라미터 제거
+                if selected_sheet == '케어온':
+                    latest_data_df = pd.read_excel(excel_path)
+                else:
+                    latest_data_df = pd.read_excel(excel_path, skiprows=1)
+            else:
+                # 전체 엑셀 파일인 경우 sheet_name 파라미터 사용
+                if selected_sheet == '케어온':
+                    latest_data_df = pd.read_excel(excel_path, sheet_name=selected_sheet)
+                else:
+                    latest_data_df = pd.read_excel(excel_path, sheet_name=selected_sheet, skiprows=1)
+            
             logger.info(f"시트 '{selected_sheet}'에서 {len(latest_data_df)}개의 데이터를 가져왔습니다.")
+            logger.info(f"컬럼: {list(latest_data_df.columns)}")
         except Exception as e:
             logger.error(f"'{selected_sheet}' 시트를 읽는 중 오류 발생: {e}")
             # 실패 시 모든 시트 이름 출력
@@ -204,8 +218,8 @@ def sync_and_notify():
 
         # 파일은 삭제하지 않고 보관
         logger.info(f"📁 다운로드된 파일들은 'downloads' 폴더에 보관됩니다.")
-
-    except Exception as e:
+            
+        except Exception as e:
         logger.error("동기화 작업 중 심각한 오류가 발생했습니다.")
         logger.error(traceback.format_exc())
     finally:
@@ -257,42 +271,50 @@ def filter_new_data_by_type(df, existing_identifiers, sheet_name, inquiry_type):
     column_mappings = {
         '견적 의뢰': {
             'name_col': '이름',
-            'phone_col': '연락처',
-            'required_cols': ['이름', '연락처'],
+            'phone_col': '전화번호',
+            'required_cols': ['이름', '전화번호'],
             'extra_fields': {
-                'company': '회사명',
-                'email': '이메일',
-                'inquiry_content': '문의내용'
+                'inquiry_type': '문의',
+                'region': '지역',
+                'consultation_content': '상담내용(EA)',
+                'channel': '채널',
+                'form_type': '형태'
             }
         },
         '상담 문의': {
             'name_col': '이름',
-            'phone_col': '연락처',
-            'required_cols': ['이름', '연락처'],
+            'phone_col': '전화번호',
+            'required_cols': ['이름', '전화번호'],
             'extra_fields': {
-                'consultation_type': '상담유형',
-                'consultation_content': '상담내용',
-                'preferred_time': '희망시간'
+                'inquiry_type': '문의',
+                'region': '지역',
+                'consultation_content': '상담내용(EA)',
+                'channel': '채널',
+                'form_type': '형태'
             }
         },
         '문의 사항': {
             'name_col': '이름',
-            'phone_col': '연락처',
-            'required_cols': ['이름', '연락처'],
+            'phone_col': '전화번호',
+            'required_cols': ['이름', '전화번호'],
             'extra_fields': {
-                'inquiry_category': '문의분류',
-                'inquiry_content': '문의내용',
-                'reply_needed': '답변필요여부'
+                'inquiry_type': '문의',
+                'region': '지역',
+                'consultation_content': '상담내용(EA)',
+                'channel': '채널',
+                'form_type': '형태'
             }
         },
         'CCTV 관리': {
             'name_col': '이름',
-            'phone_col': '연락처',
-            'required_cols': ['이름', '연락처'],
+            'phone_col': '전화번호',
+            'required_cols': ['이름', '전화번호'],
             'extra_fields': {
-                'location': '설치장소',
-                'device_count': '장비수량',
-                'management_type': '관리유형'
+                'inquiry_type': '문의',
+                'region': '지역',
+                'consultation_content': '상담내용(EA)',
+                'channel': '채널',
+                'form_type': '형태'
             }
         },
         '케어온 신청': {
@@ -366,9 +388,9 @@ def filter_new_data_by_type(df, existing_identifiers, sheet_name, inquiry_type):
 
 def send_slack_notifications(new_records, notification_manager):
     """신규 데이터에 대한 슬랙 알림을 발송합니다."""
-    if not new_records:
-        return
-    
+        if not new_records:
+            return
+
     # inquiry_type별로 그룹화
     grouped_records = {}
     for record in new_records:

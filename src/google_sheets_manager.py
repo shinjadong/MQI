@@ -24,23 +24,35 @@ import pandas as pd
 class GoogleSheetsManager:
     """Google Sheets API 관련 작업을 관리하는 클래스"""
 
-    def __init__(self, credentials_path=None):
+    def __init__(self, spreadsheet_url: Optional[str] = None, credentials_path: Optional[str] = None) -> None:
         """
         GoogleSheetsManager를 초기화합니다.
         
-        :param credentials_path: Google 서비스 계정 인증서 파일 경로
+        Args:
+            spreadsheet_url: Google Sheets URL (기본값: 환경변수에서 가져옴)
+            credentials_path: 서비스 계정 JSON 파일 경로 (기본값: 환경변수에서 가져옴)
         """
         self.logger = logging.getLogger(__name__)
-        self.sheets_url = os.getenv('GOOGLE_SHEETS_URL')
         
-        if not self.sheets_url:
-            self.logger.critical("GOOGLE_SHEETS_URL이 환경 변수에 설정되지 않았습니다.")
-            raise ValueError("GOOGLE_SHEETS_URL이 필요합니다.")
-            
+        self.spreadsheet_url = spreadsheet_url or os.getenv('GOOGLE_SHEETS_URL')
+        if not self.spreadsheet_url:
+            self.logger.critical("Google Sheets URL이 제공되지 않았습니다.")
+            raise ValueError("Google Sheets URL이 필요합니다.")
+        
+        # 스프레드시트 ID 추출
+        self.spreadsheet_id = self._extract_spreadsheet_id_from_url()
+        
+        # 서비스 계정 파일 경로 설정 - 프로젝트 루트 기준으로 변경
         self.credentials_path = credentials_path or os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE')
         if not self.credentials_path:
             self.logger.critical("Google 서비스 계정 파일 경로가 제공되지 않았습니다.")
             raise ValueError("Google 서비스 계정 파일 경로가 필요합니다.")
+        
+        # 상대 경로인 경우 프로젝트 루트 기준으로 절대 경로로 변환
+        if not os.path.isabs(self.credentials_path):
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.credentials_path = os.path.join(project_root, self.credentials_path)
+            self.logger.info(f"서비스 계정 파일 경로: {self.credentials_path}")
         
         self.creds = self._get_credentials()
         self.drive_service = build('drive', 'v3', credentials=self.creds)
@@ -60,7 +72,7 @@ class GoogleSheetsManager:
 
     def _extract_spreadsheet_id_from_url(self) -> str:
         """Google Sheets URL에서 스프레드시트 ID를 추출합니다."""
-        match = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', self.sheets_url)
+        match = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', self.spreadsheet_url)
         if not match:
             self.logger.error("URL에서 스프레드시트 ID를 찾을 수 없습니다.")
             raise ValueError("유효하지 않은 Google Sheets URL입니다.")
@@ -78,7 +90,7 @@ class GoogleSheetsManager:
         
         while retry_count < max_retries:
             try:
-                spreadsheet_id = self._extract_spreadsheet_id_from_url()
+                spreadsheet_id = self.spreadsheet_id
                 
                 # 스프레드시트 메타데이터 가져오기
                 spreadsheet = self.sheets_service.spreadsheets().get(
@@ -113,7 +125,7 @@ class GoogleSheetsManager:
         :return: 다운로드된 파일의 경로 또는 실패 시 None
         """
         try:
-            spreadsheet_id = self._extract_spreadsheet_id_from_url()
+            spreadsheet_id = self.spreadsheet_id
             self.logger.info(f"스프레드시트 다운로드를 시작합니다 (ID: {spreadsheet_id}).")
 
             request = self.drive_service.files().export_media(

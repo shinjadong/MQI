@@ -25,23 +25,33 @@ class SupabaseManager:
             (name, phone) 튜플의 집합
         """
         try:
-            # identifier_columns에서 phone_number를 phone으로 변경
-            db_columns = []
-            for col in identifier_columns:
-                if col == 'phone_number':
-                    db_columns.append('phone')
-                else:
-                    db_columns.append(col)
-            
-            response = self.client.table(view_name).select(','.join(db_columns)).execute()
-            existing_identifiers = set()
-            
-            for row in response.data:
-                # phone_number 대신 phone 사용
-                name = row.get('name')
-                phone = row.get('phone')
-                if name and phone:
-                    existing_identifiers.add((str(name), str(phone)))
+            # careon_applications는 phone_number를 사용하고, 나머지는 phone를 사용
+            if view_name == 'careon_applications':
+                response = self.client.table(view_name).select(','.join(identifier_columns)).execute()
+                existing_identifiers = set()
+                
+                for row in response.data:
+                    name = row.get('name')
+                    phone = row.get('phone_number')
+                    if name and phone:
+                        existing_identifiers.add((str(name), str(phone)))
+            else:
+                # identifier_columns에서 phone_number를 phone으로 변경
+                db_columns = []
+                for col in identifier_columns:
+                    if col == 'phone_number':
+                        db_columns.append('phone')
+                    else:
+                        db_columns.append(col)
+                
+                response = self.client.table(view_name).select(','.join(db_columns)).execute()
+                existing_identifiers = set()
+                
+                for row in response.data:
+                    name = row.get('name')
+                    phone = row.get('phone')
+                    if name and phone:
+                        existing_identifiers.add((str(name), str(phone)))
                     
             return existing_identifiers
         except Exception as e:
