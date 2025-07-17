@@ -17,7 +17,7 @@ import logging
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 import pandas as pd
 
@@ -44,12 +44,14 @@ class GoogleSheetsManager:
         
         self.creds = self._get_credentials()
         self.drive_service = build('drive', 'v3', credentials=self.creds)
+        self.sheets_service = build('sheets', 'v4', credentials=self.creds)
         
     def _get_credentials(self) -> Credentials:
         """서비스 계정 파일을 사용하여 인증 정보를 가져옵니다."""
         try:
             scopes = [
                 'https://www.googleapis.com/auth/drive.readonly',
+                'https://www.googleapis.com/auth/spreadsheets.readonly'
             ]
             return Credentials.from_service_account_file(self.credentials_path, scopes=scopes)
         except Exception as e:
@@ -63,6 +65,32 @@ class GoogleSheetsManager:
             self.logger.error("URL에서 스프레드시트 ID를 찾을 수 없습니다.")
             raise ValueError("유효하지 않은 Google Sheets URL입니다.")
         return match.group(1)
+
+    def get_sheet_names(self) -> List[str]:
+        """
+        스프레드시트의 모든 시트 이름을 가져옵니다.
+        
+        :return: 시트 이름 리스트 (순서대로)
+        """
+        try:
+            spreadsheet_id = self._extract_spreadsheet_id_from_url()
+            
+            # 스프레드시트 메타데이터 가져오기
+            spreadsheet = self.sheets_service.spreadsheets().get(
+                spreadsheetId=spreadsheet_id
+            ).execute()
+            
+            # 시트 이름 추출 (순서대로)
+            sheet_names = []
+            for sheet in spreadsheet['sheets']:
+                sheet_names.append(sheet['properties']['title'])
+                
+            self.logger.info(f"스프레드시트에서 {len(sheet_names)}개의 시트를 찾았습니다: {sheet_names}")
+            return sheet_names
+            
+        except Exception as e:
+            self.logger.error(f"시트 목록 가져오기 실패: {e}")
+            return []
 
     def download_sheet_as_excel(self, output_dir: str = "downloads") -> Optional[str]:
         """
