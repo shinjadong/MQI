@@ -72,25 +72,38 @@ class GoogleSheetsManager:
         
         :return: 시트 이름 리스트 (순서대로)
         """
-        try:
-            spreadsheet_id = self._extract_spreadsheet_id_from_url()
-            
-            # 스프레드시트 메타데이터 가져오기
-            spreadsheet = self.sheets_service.spreadsheets().get(
-                spreadsheetId=spreadsheet_id
-            ).execute()
-            
-            # 시트 이름 추출 (순서대로)
-            sheet_names = []
-            for sheet in spreadsheet['sheets']:
-                sheet_names.append(sheet['properties']['title'])
+        import time
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                spreadsheet_id = self._extract_spreadsheet_id_from_url()
                 
-            self.logger.info(f"스프레드시트에서 {len(sheet_names)}개의 시트를 찾았습니다: {sheet_names}")
-            return sheet_names
-            
-        except Exception as e:
-            self.logger.error(f"시트 목록 가져오기 실패: {e}")
-            return []
+                # 스프레드시트 메타데이터 가져오기
+                spreadsheet = self.sheets_service.spreadsheets().get(
+                    spreadsheetId=spreadsheet_id
+                ).execute()
+                
+                # 시트 이름 추출 (순서대로)
+                sheet_names = []
+                for sheet in spreadsheet['sheets']:
+                    sheet_names.append(sheet['properties']['title'])
+                    
+                self.logger.info(f"스프레드시트에서 {len(sheet_names)}개의 시트를 찾았습니다: {sheet_names}")
+                return sheet_names
+                
+            except Exception as e:
+                retry_count += 1
+                if "503" in str(e) and retry_count < max_retries:
+                    wait_time = 2 ** retry_count  # 지수 백오프: 2, 4, 8초
+                    self.logger.warning(f"Google Sheets API 일시적 오류. {wait_time}초 후 재시도합니다... ({retry_count}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    self.logger.error(f"시트 목록 가져오기 실패: {e}")
+                    return []
+        
+        return []
 
     def download_sheet_as_excel(self, output_dir: str = "downloads") -> Optional[str]:
         """

@@ -74,9 +74,22 @@ def sync_and_notify():
 
         # 1. 스프레드시트의 모든 시트 이름 가져오기
         sheet_names = gs_manager.get_sheet_names()
+        
+        # API 오류 시 폴백: 전체 다운로드 후 시트 목록 확인
         if not sheet_names:
-            logger.error("스프레드시트에서 시트 목록을 가져올 수 없습니다.")
-            return
+            logger.warning("Google Sheets API로 시트 목록을 가져올 수 없습니다. 전체 파일을 다운로드하여 확인합니다.")
+            temp_excel = gs_manager.download_sheet_as_excel()
+            if temp_excel:
+                try:
+                    xl_file = pd.ExcelFile(temp_excel)
+                    sheet_names = xl_file.sheet_names
+                    logger.info(f"다운로드한 파일에서 {len(sheet_names)}개의 시트를 찾았습니다: {sheet_names}")
+                except Exception as e:
+                    logger.error(f"엑셀 파일에서 시트 목록을 읽을 수 없습니다: {e}")
+                    return
+            else:
+                logger.error("스프레드시트를 다운로드할 수 없습니다.")
+                return
 
         # 2. 오늘 날짜와 매칭되는 시트 찾기
         today = datetime.now()
